@@ -10772,7 +10772,13 @@ standard_sse_constant_p (rtx x)
   
   if (x == const0_rtx || x == CONST0_RTX (mode))
     return 1;
-  if (vector_all_ones_operand (x, mode))
+  if (CONST_INT_P (x))
+    {
+      if ((HOST_WIDE_INT) INTVAL (x) == HOST_WIDE_INT_M1
+	  && TARGET_SSE2)
+	return 2;
+    }
+  else if (vector_all_ones_operand (x, mode))
     switch (mode)
       {
       case V16QImode:
