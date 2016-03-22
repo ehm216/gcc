@@ -3026,46 +3026,41 @@ check_non_convertible_regs_64 (bitmap candidates, bitmap regs,
     }
 }
 
-static bool
+static void
 check_non_convertible_reg_64 (bitmap candidates, bitmap regs,
-			      rtx reg, unsigned int id, bool is_def)
+			      bitmap new_regs, rtx reg,
+			      unsigned int id, bool is_def)
 {
-  bool changed = false;
-
   if (!bitmap_bit_p (regs, REGNO (reg))
       && !HARD_REGISTER_P (reg))
     {
       unsigned int regno = REGNO (reg);
       if (candidates)
 	check_non_convertible_regs_64 (candidates, regs, regno);
-      else
+      else if (!bitmap_bit_p (regs, regno))
 	{
 	  if (dump_file)
 	    fprintf (dump_file,
 		     "r%d has non convertible %s in insn %d\n",
 		     regno, is_def ? "def" : "use", id);
 
-	  bitmap_set_bit (regs, regno);
-	  changed = true;
+	  bitmap_set_bit (new_regs, regno);
 	}
     }
-
-  return changed;
 }
 
-static bool
+static void
 check_non_convertible_insn_64 (bitmap candidates, bitmap regs,
-			       rtx_insn *insn)
+			       bitmap new_regs, rtx_insn *insn)
 
 {
-  bool changed = false;
   rtx def_set = single_set (insn);
   rtx dest = SET_DEST (def_set);
 
   /* Check if destination register is not non convertible.  */
   if (REG_P (dest))
-    changed |= check_non_convertible_reg_64 (candidates, regs, dest,
-					     INSN_UID (insn), true);
+    check_non_convertible_reg_64 (candidates, regs, new_regs, dest,
+				  INSN_UID (insn), true);
 
   /* Source can be memory, pseudo register, constant or bitwise
      operations.  */
@@ -3073,8 +3068,8 @@ check_non_convertible_insn_64 (bitmap candidates, bitmap regs,
   switch (GET_CODE (src))
     {
     case REG:
-      changed |= check_non_convertible_reg_64 (candidates, regs, src,
-					       INSN_UID (insn), false);
+      check_non_convertible_reg_64 (candidates, regs, new_regs, src,
+				    INSN_UID (insn), false);
       break;
 
     case MEM:
@@ -3086,30 +3081,26 @@ check_non_convertible_insn_64 (bitmap candidates, bitmap regs,
     case AND:
       /* Bitwise operations.  */
       if (REG_P (XEXP (src, 0)))
-	changed |= check_non_convertible_reg_64 (candidates, regs,
-						 XEXP (src, 0),
-						 INSN_UID (insn),
-						 false);
+	check_non_convertible_reg_64 (candidates, regs, new_regs,
+				      XEXP (src, 0), INSN_UID (insn),
+				      false);
       if (REG_P (XEXP (src, 1)))
-	changed |= check_non_convertible_reg_64 (candidates, regs,
-						 XEXP (src, 1),
-						 INSN_UID (insn),
-						 false);
+	check_non_convertible_reg_64 (candidates, regs, new_regs,
+				      XEXP (src, 1), INSN_UID (insn),
+				      false);
       break;
 
     default:
       gcc_unreachable ();
     }
-
-  return changed;
 }
 
-static bool
-remove_non_convertible_insns_64 (bitmap candidates, bitmap regs)
+static void
+remove_non_convertible_insns_64 (bitmap candidates, bitmap regs,
+				 bitmap new_regs)
 {
   bitmap_iterator bi;
   unsigned int id;
-  bool changed = false;
 
   EXECUTE_IF_SET_IN_BITMAP (regs, 0, id, bi)
     {
@@ -3122,8 +3113,8 @@ remove_non_convertible_insns_64 (bitmap candidates, bitmap regs)
 	      fprintf (dump_file, "Removing insn %d from candidates list\n",
 		       DF_REF_INSN_UID (def));
 
-	    changed |= check_non_convertible_insn_64 (NULL, regs,
-						      DF_REF_INSN (def));
+	    check_non_convertible_insn_64 (NULL, regs, new_regs,
+					   DF_REF_INSN (def));
 
 	    bitmap_clear_bit (candidates, DF_REF_INSN_UID (def));
 	  }
@@ -3137,14 +3128,12 @@ remove_non_convertible_insns_64 (bitmap candidates, bitmap regs)
 	      fprintf (dump_file, "Removing insn %d from candidates list\n",
 		       DF_REF_INSN_UID (ref));
 
-	    changed |= check_non_convertible_insn_64 (NULL, regs,
-						      DF_REF_INSN (ref));
+	    check_non_convertible_insn_64 (NULL, regs, new_regs,
+					   DF_REF_INSN (ref));
 
 	    bitmap_clear_bit (candidates, DF_REF_INSN_UID (ref));
 	  }
     }
-
-  return changed;
 }
 
 /* The 64-bit version of remove_non_convertible_regs.  */
@@ -3155,14 +3144,24 @@ remove_non_convertible_regs_64 (bitmap candidates)
   bitmap_iterator bi;
   unsigned int id;
   bitmap regs = BITMAP_ALLOC (NULL);
+  bitmap new_regs = BITMAP_ALLOC (NULL);
 
   EXECUTE_IF_SET_IN_BITMAP (candidates, 0, id, bi)
-    check_non_convertible_insn_64 (candidates, regs,
+    check_non_convertible_insn_64 (candidates, regs, new_regs,
 				   DF_INSN_UID_GET (id)->insn);
 
-  while (remove_non_convertible_insns_64 (candidates, regs))
-    ;
+  do
+    {
+      remove_non_convertible_insns_64 (candidates, regs, new_regs);
+      if (bitmap_empty_p (new_regs))
+	break;
+      BITMAP_FREE (regs);
+      regs = new_regs;
+      new_regs = BITMAP_ALLOC (NULL);
+    }
+  while (1);
 
+  BITMAP_FREE (new_regs);
   BITMAP_FREE (regs);
 }
 
